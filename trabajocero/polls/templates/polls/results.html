@@ -1,0 +1,26 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Resultados - {{ question.question_text }}</title>
+    <link rel="stylesheet" href="{% static 'polls/style.css' %}">
+</head>
+<body>
+    <h1>Resultados: {{ question.question_text }}</h1>
+
+    {% if question.choice_set.all %}
+        <ul>
+            {% for choice in question.choice_set.all %}
+                <li>
+                    {{ choice.choice_text }} — <strong>{{ choice.votes }}</strong> votos
+                </li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>No hay opciones registradas para esta pregunta.</p>
+    {% endif %}
+
+    <a href="{% url 'polls:index' %}">← Volver al listado</a>
+</body>
+</html>
