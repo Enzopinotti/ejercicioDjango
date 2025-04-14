@@ -7,18 +7,23 @@
     <link rel="stylesheet" href="{% static 'polls/style.css' %}">
 </head>
 <body>
-    <h1>{{ question.question_text }}</h1>
+  <h1>{{ question.question_text }}</h1>
 
-    {% if question.choice_set.all %}
-        <ul>
-            {% for choice in question.choice_set.all %}
-                <li>{{ choice.choice_text }}</li>
-            {% endfor %}
-        </ul>
-    {% else %}
-        <p>No hay opciones disponibles para esta encuesta.</p>
-    {% endif %}
+  {% if question.choice_set.all %}
+    <form action="{% url 'polls:vote' question.id %}" method="post">
+      {% csrf_token %}
+      {% for choice in question.choice_set.all %}
+        <label>
+          <input type="radio" name="choice" value="{{ choice.id }}">
+          {{ choice.choice_text }}
+        </label><br>
+      {% endfor %}
+      <button type="submit">Votar</button>
+    </form>
+  {% else %}
+    <p>No hay opciones para votar.</p>
+  {% endif %}
 
-    <a href="{% url 'polls:index' %}">← Volver al listado</a>
+  <a href="{% url 'polls:index' %}">← Volver al listado</a>
 </body>
 </html>
