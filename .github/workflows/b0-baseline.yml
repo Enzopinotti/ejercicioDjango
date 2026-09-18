@@ -6,6 +6,7 @@ on:
       - modernize/2026-django-quality
     paths:
       - .github/workflows/b0-baseline.yml
+      - docs/modernization-2026/b0-baseline.md
   workflow_dispatch:
 
 permissions:
@@ -129,12 +130,15 @@ jobs:
           }
           trap cleanup EXIT
 
+          ready=0
           for attempt in $(seq 1 40); do
             if curl --fail --silent --output /dev/null http://127.0.0.1:8000/polls/; then
+              ready=1
               break
             fi
             sleep 0.25
           done
+          test "$ready" -eq 1
 
           qid="$(python - <<'PY'
           import sqlite3
@@ -177,6 +181,7 @@ jobs:
           audit_code=$?
           set -e
           echo "pip_audit_exit=$audit_code" | tee b0-pip-audit-status.txt
+
           python - <<'PY' | tee b0-pip-audit-summary.txt
           import json
           from pathlib import Path
@@ -205,41 +210,7 @@ jobs:
 
           unexpected="$(
             git diff --name-only |
-            grep -Ev '(^|/)__pycache__/.*\.pyc
-
-      - name: Write baseline summary
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "# ejercicioDjango B0 historical baseline"
-            echo "- SHA: $GITHUB_SHA"
-            echo "- historical Python evidence: CPython 3.12"
-            echo "- historical Django evidence: 5.0"
-            echo "- test file exists but contains no authored tests"
-            echo "- tracked db.sqlite3: yes"
-            echo "- tracked __pycache__/pyc: yes"
-            echo "- declared dependency file: none"
-            echo
-            cat b0-runtime.txt 2>/dev/null || true
-            cat b0-pip-audit-summary.txt 2>/dev/null || true
-            cat b0-http-smoke.txt 2>/dev/null || true
-          } | tee b0-summary.md
-          cat b0-summary.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload B0 evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: b0-baseline-${{ github.sha }}
-          retention-days: 30
-          if-no-files-found: error
-          path: |
-            b0-*.txt
-            b0-*.json
-            b0-*.md
-            b0-runserver.log
- || true
+            grep -Ev '(^|/)__pycache__/.*\.pyc$' || true
           )"
 
           if [ -n "$unexpected" ]; then
@@ -250,41 +221,7 @@ jobs:
 
           pyc_count="$(
             git diff --name-only |
-            grep -Ec '(^|/)__pycache__/.*\.pyc
-
-      - name: Write baseline summary
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "# ejercicioDjango B0 historical baseline"
-            echo "- SHA: $GITHUB_SHA"
-            echo "- historical Python evidence: CPython 3.12"
-            echo "- historical Django evidence: 5.0"
-            echo "- test file exists but contains no authored tests"
-            echo "- tracked db.sqlite3: yes"
-            echo "- tracked __pycache__/pyc: yes"
-            echo "- declared dependency file: none"
-            echo
-            cat b0-runtime.txt 2>/dev/null || true
-            cat b0-pip-audit-summary.txt 2>/dev/null || true
-            cat b0-http-smoke.txt 2>/dev/null || true
-          } | tee b0-summary.md
-          cat b0-summary.md >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload B0 evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: b0-baseline-${{ github.sha }}
-          retention-days: 30
-          if-no-files-found: error
-          path: |
-            b0-*.txt
-            b0-*.json
-            b0-*.md
-            b0-runserver.log
- || true
+            grep -Ec '(^|/)__pycache__/.*\.pyc$' || true
           )"
           echo "tracked_pyc_mutations=$pyc_count" | tee b0-mutation-summary.txt
           test "$pyc_count" -eq 12
@@ -306,6 +243,7 @@ jobs:
             cat b0-runtime.txt 2>/dev/null || true
             cat b0-pip-audit-summary.txt 2>/dev/null || true
             cat b0-http-smoke.txt 2>/dev/null || true
+            cat b0-mutation-summary.txt 2>/dev/null || true
           } | tee b0-summary.md
           cat b0-summary.md >> "$GITHUB_STEP_SUMMARY"
 
