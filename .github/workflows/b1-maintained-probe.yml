@@ -1,0 +1,189 @@
+name: B1 maintained-runtime probe
+
+on:
+  push:
+    branches:
+      - modernize/2026-django-quality
+    paths:
+      - .github/workflows/b1-maintained-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Setup maintained Python candidate
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12.14"
+
+      - name: Install Django LTS candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "Django==5.2.17"
+          {
+            python --version
+            python -m django --version
+            python -m pip freeze
+          } | tee b1-candidate-freeze.txt
+
+      - name: Rebuild database from migration authority
+        shell: bash
+        working-directory: trabajocero
+        run: |
+          set -euo pipefail
+          mv db.sqlite3 ../b1-historical-db.sqlite3
+          python manage.py check
+          python manage.py makemigrations --check --dry-run
+          python manage.py migrate --noinput
+          python manage.py migrate --check
+
+          python - <<'PY' | tee ../b1-fresh-db.txt
+          import sqlite3
+          from pathlib import Path
+
+          db = Path("db.sqlite3")
+          con = sqlite3.connect(db)
+          cur = con.cursor()
+          tables = [
+              row[0]
+              for row in cur.execute(
+                  "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+              )
+          ]
+          print(f"db_created={db.exists()}")
+          print(f"table_count={len(tables)}")
+          print("tables=" + ",".join(tables))
+          for table in ("polls_question", "polls_choice", "auth_user", "django_migrations"):
+              if table in tables:
+                  count = cur.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                  print(f"{table}_rows={count}")
+          con.close()
+          PY
+
+      - name: Seed ephemeral smoke data
+        shell: bash
+        working-directory: trabajocero
+        run: |
+          set -euo pipefail
+          python manage.py shell -c "from django.utils import timezone; from polls.models import Question, Choice; q=Question.objects.create(question_text='B1 smoke question', pub_date=timezone.now()); Choice.objects.create(question=q, choice_text='Yes'); Choice.objects.create(question=q, choice_text='No'); print(q.pk)" | tail -1 | tee ../b1-question-id.txt
+
+      - name: Run existing test command
+        shell: bash
+        working-directory: trabajocero
+        run: |
+          set -euo pipefail
+          python manage.py test -v 2 2>&1 | tee ../b1-tests.txt
+
+      - name: Smoke maintained runtime
+        shell: bash
+        working-directory: trabajocero
+        run: |
+          set -euo pipefail
+          qid="$(cat ../b1-question-id.txt)"
+          python manage.py runserver 127.0.0.1:8000 --noreload > ../b1-runserver.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:8000/polls/; then
+              ready=1
+              break
+            fi
+            sleep 0.25
+          done
+          test "$ready" -eq 1
+
+          {
+            echo "polls_index=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/polls/)"
+            echo "static_css=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/static/polls/style.css)"
+            echo "admin=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/admin/)"
+            echo "question_detail=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8000/polls/$qid/")"
+            echo "question_results=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8000/polls/$qid/results/")"
+          } | tee ../b1-http-smoke.txt
+
+          grep -q '^polls_index=200$' ../b1-http-smoke.txt
+          grep -q '^static_css=200$' ../b1-http-smoke.txt
+          grep -Eq '^admin=(200|302)$' ../b1-http-smoke.txt
+          grep -q '^question_detail=200$' ../b1-http-smoke.txt
+          grep -q '^question_results=200$' ../b1-http-smoke.txt
+
+      - name: Audit maintained dependency candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip freeze > b1-candidate-requirements.txt
+          python -m pip install pip-audit
+          python -m pip_audit -r b1-candidate-requirements.txt --format json --output b1-pip-audit.json
+
+          python - <<'PY' | tee b1-pip-audit-summary.txt
+          import json
+          from pathlib import Path
+
+          data = json.loads(Path("b1-pip-audit.json").read_text())
+          dependencies = data.get("dependencies", [])
+          findings = sorted({
+              (dep.get("name"), dep.get("version"), vuln.get("id"))
+              for dep in dependencies
+              for vuln in dep.get("vulns", [])
+          })
+          print(f"audited_dependencies={len(dependencies)}")
+          print(f"unique_vulnerability_findings={len(findings)}")
+          for name, version, vuln_id in findings:
+              print(f"finding={name}@{version}:{vuln_id}")
+          if findings:
+              raise SystemExit(1)
+          PY
+
+      - name: Verify source stayed untouched
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f trabajocero/db.sqlite3
+          mv b1-historical-db.sqlite3 trabajocero/db.sqlite3
+          git diff --exit-code
+          git status --short | tee b1-git-status.txt
+
+      - name: Write candidate summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# B1 maintained runtime candidate"
+            echo "- SHA: $GITHUB_SHA"
+            cat b1-candidate-freeze.txt 2>/dev/null || true
+            cat b1-fresh-db.txt 2>/dev/null || true
+            cat b1-http-smoke.txt 2>/dev/null || true
+            cat b1-pip-audit-summary.txt 2>/dev/null || true
+          } | tee b1-summary.md
+          cat b1-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload B1 probe evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: b1-maintained-probe-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            b1-*.txt
+            b1-*.json
+            b1-*.md
+            b1-runserver.log
