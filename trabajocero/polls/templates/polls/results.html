@@ -3,24 +3,27 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Resultados | {{ question.question_text }}</title>
   <link rel="stylesheet" href="{% static 'polls/style.css' %}">
 </head>
 <body>
   <h1>📊 Resultados: {{ question.question_text }}</h1>
-  <div class="container">
+  <main class="container">
     {% if question.choice_set.all %}
       <ul>
         {% for choice in question.choice_set.all %}
           <li>
-            {{ choice.choice_text }} — <strong>{{ choice.votes }}</strong> votos
+            {{ choice.choice_text }} —
+            <strong>{{ choice.votes }}</strong>
+            voto{% if choice.votes != 1 %}s{% endif %}
           </li>
         {% endfor %}
       </ul>
     {% else %}
-      <p>No hay votos registrados para esta encuesta.</p>
+      <p>No hay opciones disponibles para esta encuesta.</p>
     {% endif %}
     <p><a href="{% url 'polls:index' %}">← Volver al listado</a></p>
-  </div>
+  </main>
 </body>
 </html>

@@ -146,4 +146,42 @@ body {
       transform: scale(1.2);
     }
   }
-  
+
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+legend {
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.choice-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#vote-error {
+  font-weight: 700;
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 3px solid #003f6b;
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
