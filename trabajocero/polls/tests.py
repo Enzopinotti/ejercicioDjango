@@ -231,9 +231,9 @@ class TemplateAccessibilityTests(TestCase):
         response = self.client.get(
             reverse("polls:results", args=(self.question.id,))
         )
-        self.assertContains(response, "1 voto")
-        self.assertContains(response, "2 votos")
-        self.assertNotContains(response, "1 votos")
+        self.assertContains(response, "<strong>1</strong> voto")
+        self.assertContains(response, "<strong>2</strong> votos")
+        self.assertNotContains(response, "<strong>1</strong> votos")
         self.assertContains(response, plural.choice_text)
 
     def test_results_without_choices_describe_missing_options(self):
