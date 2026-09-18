@@ -191,7 +191,7 @@ class TemplateAccessibilityTests(TestCase):
                 response = self.client.get(url)
                 self.assertContains(
                     response,
-                    'meta name="viewport" content="width=device-width, initial-scale=1"',
+                    '<meta name="viewport" content="width=device-width, initial-scale=1">',
                     html=True,
                 )
                 self.assertContains(response, "<main", count=1)

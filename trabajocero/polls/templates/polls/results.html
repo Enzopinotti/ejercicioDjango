@@ -14,9 +14,7 @@
       <ul>
         {% for choice in question.choice_set.all %}
           <li>
-            {{ choice.choice_text }} —
-            <strong>{{ choice.votes }}</strong>
-            voto{% if choice.votes != 1 %}s{% endif %}
+            {{ choice.choice_text }} — <strong>{{ choice.votes }}</strong> voto{% if choice.votes != 1 %}s{% endif %}
           </li>
         {% endfor %}
       </ul>
