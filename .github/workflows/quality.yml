@@ -36,6 +36,7 @@ jobs:
           cache-dependency-path: requirements.txt
 
       - name: Verify runtime identity
+        id: runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -46,37 +47,143 @@ jobs:
           test "$actual" = "$expected"
 
       - name: Install exact runtime graph
-        run: python -m pip install --requirement requirements.txt
+        id: install
+        run: |
+          python -m pip install --requirement requirements.txt
+          python -m pip check
 
       - name: Repository hygiene contract
+        id: hygiene
         run: python scripts/quality.py
 
       - name: B3 configuration contract
+        id: config
         run: python scripts/config_contract.py
 
       - name: Django system check
+        id: check
         working-directory: trabajocero
         run: python manage.py check
 
       - name: Migration drift check
+        id: migration_drift
         working-directory: trabajocero
         run: python manage.py makemigrations --check --dry-run
 
       - name: Rebuild local database from migrations
+        id: migrate
         working-directory: trabajocero
         run: |
           rm -f db.sqlite3
           python manage.py migrate --noinput
           python manage.py migrate --check
 
-      - name: Existing test suite
+      - name: Polls behavior and accessibility suite
+        id: tests
         working-directory: trabajocero
         run: python manage.py test -v 2
 
+      - name: B5 production-like HTTP smoke
+        id: runtime_smoke
+        working-directory: trabajocero
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          qid="$(
+            python manage.py shell -c "
+          from django.utils import timezone
+          from polls.models import Choice, Question
+          published = Question.objects.create(
+              question_text='B5 runtime published question',
+              pub_date=timezone.now(),
+          )
+          Choice.objects.create(question=published, choice_text='Yes')
+          Question.objects.create(
+              question_text='B5 runtime future question',
+              pub_date=timezone.now() + timezone.timedelta(days=1),
+          )
+          print(published.pk)
+          " | tail -1
+          )"
+
+          python manage.py runserver 127.0.0.1:8000 --noreload > ../b5-runserver.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:8000/polls/; then
+              ready=1
+              break
+            fi
+            sleep 0.25
+          done
+          test "$ready" -eq 1
+
+          curl --silent http://127.0.0.1:8000/polls/ > ../b5-index.html
+
+          {
+            echo "polls_index=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/polls/)"
+            echo "static_css=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/static/polls/style.css)"
+            echo "admin=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/admin/)"
+            echo "question_detail=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8000/polls/$qid/")"
+            echo "question_results=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8000/polls/$qid/results/")"
+          } | tee ../b5-http-smoke.txt
+
+          grep -q '^polls_index=200$' ../b5-http-smoke.txt
+          grep -q '^static_css=200$' ../b5-http-smoke.txt
+          grep -q '^admin=302$' ../b5-http-smoke.txt
+          grep -q '^question_detail=200$' ../b5-http-smoke.txt
+          grep -q '^question_results=200$' ../b5-http-smoke.txt
+          grep -q 'B5 runtime published question' ../b5-index.html
+          ! grep -q 'B5 runtime future question' ../b5-index.html
+
       - name: Dependency security audit
+        id: audit
         run: |
           python -m pip install "pip-audit==2.10.1"
           python -m pip_audit --requirement requirements.txt
 
       - name: Verify tracked tree remains clean
+        id: clean_tree
         run: git diff --exit-code
+
+      - name: Write quality evidence
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# ejercicioDjango quality evidence"
+            echo "- SHA: $GITHUB_SHA"
+            echo "- Python: $(python -c 'import platform; print(platform.python_version())' 2>/dev/null || echo unavailable)"
+            echo "- Django: $(python -m django --version 2>/dev/null || echo unavailable)"
+            echo "- runtime identity: ${{ steps.runtime.outcome }}"
+            echo "- exact install/pip check: ${{ steps.install.outcome }}"
+            echo "- repository hygiene: ${{ steps.hygiene.outcome }}"
+            echo "- configuration contract: ${{ steps.config.outcome }}"
+            echo "- Django check: ${{ steps.check.outcome }}"
+            echo "- migration drift: ${{ steps.migration_drift.outcome }}"
+            echo "- clean migration rebuild: ${{ steps.migrate.outcome }}"
+            echo "- 25-test suite: ${{ steps.tests.outcome }}"
+            echo "- HTTP smoke: ${{ steps.runtime_smoke.outcome }}"
+            echo "- dependency audit: ${{ steps.audit.outcome }}"
+            echo "- tracked tree clean: ${{ steps.clean_tree.outcome }}"
+          } | tee quality-summary.md
+          cat quality-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload quality evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: quality-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            quality-summary.md
+            b5-http-smoke.txt
+            b5-runserver.log
