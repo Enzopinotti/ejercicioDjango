@@ -51,6 +51,9 @@ jobs:
       - name: Repository hygiene contract
         run: python scripts/quality.py
 
+      - name: B3 configuration contract
+        run: python scripts/config_contract.py
+
       - name: Django system check
         working-directory: trabajocero
         run: python manage.py check
