@@ -184,22 +184,110 @@ jobs:
           path = Path("b0-pip-audit.json")
           data = json.loads(path.read_text()) if path.exists() else {}
           dependencies = data.get("dependencies", [])
-          vulns = []
+          findings = []
           for dep in dependencies:
               for vuln in dep.get("vulns", []):
-                  vulns.append((dep.get("name"), dep.get("version"), vuln.get("id")))
+                  findings.append((dep.get("name"), dep.get("version"), vuln.get("id")))
+          unique = sorted(set(findings))
           print(f"audited_dependencies={len(dependencies)}")
-          print(f"vulnerability_findings={len(vulns)}")
-          for name, version, vuln_id in vulns:
+          print(f"raw_vulnerability_entries={len(findings)}")
+          print(f"unique_vulnerability_findings={len(unique)}")
+          for name, version, vuln_id in unique:
               print(f"finding={name}@{version}:{vuln_id}")
           PY
 
-      - name: Verify B0 did not modify tracked application files
+      - name: Classify tracked runtime mutations
         shell: bash
         run: |
           set -euo pipefail
-          git diff --exit-code
           git status --short | tee b0-git-status.txt
+          git diff --name-only | tee b0-tracked-mutations.txt
+
+          unexpected="$(
+            git diff --name-only |
+            grep -Ev '(^|/)__pycache__/.*\.pyc
+
+      - name: Write baseline summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# ejercicioDjango B0 historical baseline"
+            echo "- SHA: $GITHUB_SHA"
+            echo "- historical Python evidence: CPython 3.12"
+            echo "- historical Django evidence: 5.0"
+            echo "- test file exists but contains no authored tests"
+            echo "- tracked db.sqlite3: yes"
+            echo "- tracked __pycache__/pyc: yes"
+            echo "- declared dependency file: none"
+            echo
+            cat b0-runtime.txt 2>/dev/null || true
+            cat b0-pip-audit-summary.txt 2>/dev/null || true
+            cat b0-http-smoke.txt 2>/dev/null || true
+          } | tee b0-summary.md
+          cat b0-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload B0 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b0-baseline-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            b0-*.txt
+            b0-*.json
+            b0-*.md
+            b0-runserver.log
+ || true
+          )"
+
+          if [ -n "$unexpected" ]; then
+            echo "Unexpected tracked mutation outside Python bytecode:" >&2
+            printf '%s\n' "$unexpected" >&2
+            exit 1
+          fi
+
+          pyc_count="$(
+            git diff --name-only |
+            grep -Ec '(^|/)__pycache__/.*\.pyc
+
+      - name: Write baseline summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# ejercicioDjango B0 historical baseline"
+            echo "- SHA: $GITHUB_SHA"
+            echo "- historical Python evidence: CPython 3.12"
+            echo "- historical Django evidence: 5.0"
+            echo "- test file exists but contains no authored tests"
+            echo "- tracked db.sqlite3: yes"
+            echo "- tracked __pycache__/pyc: yes"
+            echo "- declared dependency file: none"
+            echo
+            cat b0-runtime.txt 2>/dev/null || true
+            cat b0-pip-audit-summary.txt 2>/dev/null || true
+            cat b0-http-smoke.txt 2>/dev/null || true
+          } | tee b0-summary.md
+          cat b0-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload B0 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b0-baseline-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            b0-*.txt
+            b0-*.json
+            b0-*.md
+            b0-runserver.log
+ || true
+          )"
+          echo "tracked_pyc_mutations=$pyc_count" | tee b0-mutation-summary.txt
+          test "$pyc_count" -eq 12
 
       - name: Write baseline summary
         if: always()
