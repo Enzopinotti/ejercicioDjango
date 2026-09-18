@@ -18,13 +18,12 @@ jobs:
 
     steps:
       - name: Checkout exact candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup historical Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-          cache: pip
 
       - name: Capture historical runtime
         shell: bash
