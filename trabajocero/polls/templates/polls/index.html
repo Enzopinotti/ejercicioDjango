@@ -3,12 +3,13 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Encuestas | Inicio</title>
   <link rel="stylesheet" href="{% static 'polls/style.css' %}">
 </head>
 <body>
   <h1>🗳️ Bienvenido al sistema de encuestas</h1>
-  <div class="container">
+  <main class="container">
     {% if latest_question_list %}
       <p>Seleccioná una encuesta para ver sus opciones y votar:</p>
       <ul>
@@ -23,6 +24,6 @@
     {% else %}
       <p>No hay encuestas disponibles en este momento.</p>
     {% endif %}
-  </div>
+  </main>
 </body>
 </html>

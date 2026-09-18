@@ -3,27 +3,40 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Encuesta | {{ question.question_text }}</title>
   <link rel="stylesheet" href="{% static 'polls/style.css' %}">
 </head>
 <body>
   <h1>📋 {{ question.question_text }}</h1>
-  <div class="container">
+  <main class="container">
+    {% if error_message %}
+      <p id="vote-error" role="alert">{{ error_message }}</p>
+    {% endif %}
     {% if question.choice_set.all %}
       <form action="{% url 'polls:vote' question.id %}" method="post">
         {% csrf_token %}
-        {% for choice in question.choice_set.all %}
-          <label>
-            <input type="radio" name="choice" value="{{ choice.id }}">
-            {{ choice.choice_text }}
-          </label>
-        {% endfor %}
+        <fieldset{% if error_message %} aria-describedby="vote-error"{% endif %}>
+          <legend>Opciones de respuesta</legend>
+          {% for choice in question.choice_set.all %}
+            <div class="choice-option">
+              <input
+                type="radio"
+                name="choice"
+                id="choice-{{ choice.id }}"
+                value="{{ choice.id }}"
+                {% if forloop.first %}required{% endif %}
+              >
+              <label for="choice-{{ choice.id }}">{{ choice.choice_text }}</label>
+            </div>
+          {% endfor %}
+        </fieldset>
         <button type="submit">Enviar voto</button>
       </form>
     {% else %}
       <p>No hay opciones disponibles para esta encuesta.</p>
     {% endif %}
     <p><a href="{% url 'polls:index' %}">← Volver al listado</a></p>
-  </div>
+  </main>
 </body>
 </html>
