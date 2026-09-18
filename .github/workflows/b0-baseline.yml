@@ -1,0 +1,236 @@
+name: B0 historical baseline
+
+on:
+  push:
+    branches:
+      - modernize/2026-django-quality
+    paths:
+      - .github/workflows/b0-baseline.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+
+      - name: Setup historical Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Capture historical runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "sha=$GITHUB_SHA"
+            python --version
+            python -m pip --version
+          } | tee b0-runtime.txt
+
+      - name: Install historical Django evidence target
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install "Django==5.0"
+          {
+            python -m django --version
+            python -m pip freeze
+          } | tee b0-packages.txt
+
+      - name: Inventory repository hygiene and database metadata
+        shell: bash
+        working-directory: trabajocero
+        run: |
+          set -euo pipefail
+          {
+            echo "# tracked generated/state paths"
+            git ls-files | grep -E '(__pycache__/|\.pyc$|db\.sqlite3$)' || true
+            echo
+            echo "# sqlite metadata (counts only; no row values)"
+            python - <<'PY'
+          import hashlib
+          import sqlite3
+          from pathlib import Path
+
+          db = Path("db.sqlite3")
+          print(f"db_exists={db.exists()}")
+          print(f"db_size={db.stat().st_size if db.exists() else 0}")
+          if db.exists():
+              print(f"db_sha256={hashlib.sha256(db.read_bytes()).hexdigest()}")
+              con = sqlite3.connect(db)
+              cur = con.cursor()
+              tables = [
+                  row[0]
+                  for row in cur.execute(
+                      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+                  )
+              ]
+              print("tables=" + ",".join(tables))
+              for table in (
+                  "polls_question",
+                  "polls_choice",
+                  "auth_user",
+                  "django_migrations",
+                  "django_session",
+              ):
+                  if table in tables:
+                      count = cur.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+                      print(f"{table}_rows={count}")
+              con.close()
+          PY
+          } | tee ../b0-repository-inventory.txt
+
+      - name: Django system and migration checks
+        shell: bash
+        working-directory: trabajocero
+        run: |
+          set -euo pipefail
+          {
+            echo "# django check"
+            python manage.py check
+            echo
+            echo "# deploy-oriented check (warnings are baseline evidence)"
+            python manage.py check --deploy || true
+            echo
+            echo "# migration graph"
+            python manage.py showmigrations --plan
+            echo
+            echo "# model/migration drift"
+            python manage.py makemigrations --check --dry-run
+          } 2>&1 | tee ../b0-django-checks.txt
+
+      - name: Run historical test command
+        shell: bash
+        working-directory: trabajocero
+        run: |
+          set -euo pipefail
+          python manage.py test -v 2 2>&1 | tee ../b0-tests.txt
+
+      - name: Production-like local HTTP smoke
+        shell: bash
+        working-directory: trabajocero
+        run: |
+          set -euo pipefail
+
+          python manage.py runserver 127.0.0.1:8000 --noreload > ../b0-runserver.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill "$server_pid" 2>/dev/null || true
+            wait "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for attempt in $(seq 1 40); do
+            if curl --fail --silent --output /dev/null http://127.0.0.1:8000/polls/; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          qid="$(python - <<'PY'
+          import sqlite3
+          con = sqlite3.connect("db.sqlite3")
+          row = con.execute("SELECT id FROM polls_question ORDER BY id LIMIT 1").fetchone()
+          con.close()
+          print(row[0] if row else "")
+          PY
+          )"
+
+          {
+            echo "polls_index=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/polls/)"
+            echo "static_css=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/static/polls/style.css)"
+            echo "admin=$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/admin/)"
+            if [ -n "$qid" ]; then
+              echo "question_detail=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8000/polls/$qid/")"
+              echo "question_results=$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:8000/polls/$qid/results/")"
+            else
+              echo "question_detail=not-probed-no-tracked-question"
+              echo "question_results=not-probed-no-tracked-question"
+            fi
+          } | tee ../b0-http-smoke.txt
+
+          grep -q '^polls_index=200$' ../b0-http-smoke.txt
+          grep -q '^static_css=200$' ../b0-http-smoke.txt
+          grep -Eq '^admin=(200|302)$' ../b0-http-smoke.txt
+          if [ -n "$qid" ]; then
+            grep -q '^question_detail=200$' ../b0-http-smoke.txt
+            grep -q '^question_results=200$' ../b0-http-smoke.txt
+          fi
+
+      - name: Audit historical dependency target
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'Django==5.0\n' > b0-historical-requirements.txt
+          python -m pip install pip-audit
+          set +e
+          python -m pip_audit -r b0-historical-requirements.txt --format json --output b0-pip-audit.json
+          audit_code=$?
+          set -e
+          echo "pip_audit_exit=$audit_code" | tee b0-pip-audit-status.txt
+          python - <<'PY' | tee b0-pip-audit-summary.txt
+          import json
+          from pathlib import Path
+
+          path = Path("b0-pip-audit.json")
+          data = json.loads(path.read_text()) if path.exists() else {}
+          dependencies = data.get("dependencies", [])
+          vulns = []
+          for dep in dependencies:
+              for vuln in dep.get("vulns", []):
+                  vulns.append((dep.get("name"), dep.get("version"), vuln.get("id")))
+          print(f"audited_dependencies={len(dependencies)}")
+          print(f"vulnerability_findings={len(vulns)}")
+          for name, version, vuln_id in vulns:
+              print(f"finding={name}@{version}:{vuln_id}")
+          PY
+
+      - name: Verify B0 did not modify tracked application files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git status --short | tee b0-git-status.txt
+
+      - name: Write baseline summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "# ejercicioDjango B0 historical baseline"
+            echo "- SHA: $GITHUB_SHA"
+            echo "- historical Python evidence: CPython 3.12"
+            echo "- historical Django evidence: 5.0"
+            echo "- test file exists but contains no authored tests"
+            echo "- tracked db.sqlite3: yes"
+            echo "- tracked __pycache__/pyc: yes"
+            echo "- declared dependency file: none"
+            echo
+            cat b0-runtime.txt 2>/dev/null || true
+            cat b0-pip-audit-summary.txt 2>/dev/null || true
+            cat b0-http-smoke.txt 2>/dev/null || true
+          } | tee b0-summary.md
+          cat b0-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload B0 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: b0-baseline-${{ github.sha }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            b0-*.txt
+            b0-*.json
+            b0-*.md
+            b0-runserver.log
